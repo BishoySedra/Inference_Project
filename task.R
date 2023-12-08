@@ -1,9 +1,18 @@
-library(readxl)
+library(caret) # for linear regression model
+library(rpart) # for decision tree model
+
+# 1.935336e-14 => linear regression model rmse before scaling and encoding
+# 2.516931 => decision tree model rmse before scaling and encoding
+
+# 3.252172e-15   => linear regression model rmse after scaling and encoding
+# 0.455449  => decision tree model rmse after scaling and encoding
+
 file <- read.csv("StudentsPerformance.csv")
+summary(file)
 
 # START PREPROCESSING
 
-#replacment 'M' -> 'Male' / 'F' -> 'Female'
+#replacement 'M' -> 'Male' / 'F' -> 'Female'
 file$sex[file$sex=="F"]="Female"
 file$sex[file$sex=="f"]="Female"
 file$sex[file$sex=="M"]="Male"
@@ -15,7 +24,7 @@ file$sex[file$sex=="m"]="Male"
 file$age <- as.numeric(file$age)
 
 
-# Handle outliars function
+# Handle outliers function
 handle_outliers <- function(column) {
   Q1 <- quantile(column, 0.25, na.rm = TRUE)
   Q3 <- quantile(column, 0.75, na.rm = TRUE)
@@ -37,48 +46,88 @@ file$absences <- handle_outliers(file$absences)
 file$internet <- ifelse(file$internet == "", "no", file$internet)
 ## cat("Number of empty values in the 'Internet' column after replacement:", sum(file$internet == ""), "\n")
 
+# Scale values of columns G1, G2, G3
+file[, c("G1", "G2", "G3")] <- scale(file[, c("G1", "G2", "G3")])
+
 
 #feature engineering
 file$Total_of_grades <- file$G1  + file$G2 + file$G3
 
-# delete dublicates
+# Encode categorical variables
+file$school <- as.factor(file$school)
+file$sex <- as.factor(file$sex)
+file$Fjob <- as.factor(file$Fjob)
+file$Mjob <- as.factor(file$Mjob)
+file$internet <- as.factor(file$internet)
+file$romantic <- as.factor(file$romantic)
+
+# Create dummy variables
+file_dummies <- model.matrix(~ . - 1, data = file)
+
+# Combine the dummy variables with the original dataset
+file <- cbind(file, file_dummies)
+
+# Remove the original categorical columns
+file <- file[, !names(file) %in% c('school', 'sex', 'Fjob', 'Mjob', 'internet', 'romantic')]
+
+# delete duplicates
 file <- unique(file)
 
 # END PREPROCESSING
+
+# display the statistics of the modified dataset
 summary(file)
 
-
 # START visualization
+
+# Scatterplot matrix
+pairs(file[, c("age", "studytime", "failures", "absences", "Total_of_grades")], main = "Scatterplot Matrix")
 
 plot(file$studytime, file$Total_of_grades , main = "PERFORMANCE [Study Time-Total Grades] " ,xlab = "Study Time" , ylab = "Total Grades")
 plot(file$failures, file$Total_of_grades, main = "PERFORMANCE [Failures-Total Grades] " ,xlab = "Failures" , ylab = "Total Grades")
 plot(file$absences, file$Total_of_grades, main = "PERFORMANCE [Absences-Total Grades] " ,xlab = "Absences" , ylab = "Total Grades")
 
+# End Visualization
 
-hist(file$age, col = "lightblue", xlab = "Age", main = "Age Histogram")
-hist(file$goout, col = "blue", xlab = "Goout", main = "Goout Histogram")
-hist(file$studytime, col = "red", xlab = "Study Time", main = "Study Time Histogram")
-hist(file$failures, col = "cyan", xlab = "Failures", main = "Failures Histogram")
-hist(file$health, col = "brown", xlab = "Health", main = "Health Histogram")
-hist(file$absences , col = "gray" , xlab = "Absences", main = "Absences Histogram")
-hist(file$Total_of_grades, col = "green", xlab = "Total Grades", main = "Total Grades Histogram")
+# Prepare data for linear regression modeling
+set.seed(123)  # for reproducibility
+splitIndex <- createDataPartition(file$Total_of_grades, p = 0.7, list = FALSE)
+train_data <- file[splitIndex, ]
+test_data <- file[-splitIndex, ]
 
-boxplot(file$age, col = "lightblue", xlab = "Age", main = "Age boxplot")
-boxplot(file$goout, col = "blue", xlab = "Goout", main = "Goout boxplot")
-boxplot(file$studytime, col = "red", xlab = "Study Time", main = "Study Time boxplot")
-boxplot(file$failures, col = "cyan", xlab = "Failures", main = "Failures boxplot")
-boxplot(file$health, col = "brown", xlab = "Health", main = "Health boxplot")
-boxplot(file$absences , col = "gray" , xlab = "Absences", main = "Absences boxplot")
-boxplot(file$Total_of_grades, col = "green", xlab = "Total Grades", main = "Total Grades boxplot")
+# Train linear regression model
+model <- train(Total_of_grades ~ ., data = train_data, method = "lm")
 
-barplot(table(file$sex),main = "Sex Bar chart")
-barplot(table(file$Fjob),main = "Father Job Bar chart")
-barplot(table(file$Mjob),main = "Mother Job Bar chart")
-barplot(table(file$internet),main = "Internet Bar chart")
-barplot(table(file$romantic),main = "Romantic Bar chart")
+# Print model summary
+# print('model information:')
+# print(model)
 
+# Make predictions on the test set
+predictions <- predict(model, newdata = test_data)
 
+# Evaluate model performance
+linear_rmse <- RMSE(predictions, test_data$Total_of_grades)
+cat("Root Mean Squared Error (RMSE) for linear regression model:", linear_rmse, "\n")
 
+# Assuming 'Total_of_grades' is your target variable
+target_variable <- "Total_of_grades"
 
+# Split the data into training and testing sets (you can use a different method)
+set.seed(123)  # For reproducibility
+train_indices <- sample(seq_len(nrow(file)), 0.8 * nrow(file))
+train_data <- file[train_indices, ]
+test_data <- file[-train_indices, ]
 
+# Train the decision tree model
+model <- rpart(formula = paste(target_variable, "~ ."), data = train_data)
 
+# Make predictions on the test set
+predictions <- predict(model, newdata = test_data)
+
+# Evaluate the model (you can use different metrics)
+tree_rmse <- sqrt(mean((test_data$Total_of_grades - predictions)^2))
+cat("Root Mean Squared Error (RMSE) for decision tree model:", tree_rmse, "\n")
+
+# Visualize the decision tree
+plot(model)
+text(model, cex = 0.5)
